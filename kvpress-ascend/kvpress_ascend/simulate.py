@@ -276,6 +276,10 @@ def install_fake_vllm() -> None:
         "vllm_ascend.worker.block_table",
         "vllm_ascend.worker.model_runner_v1",
         "vllm_ascend.ascend_forward_context",
+        # needed by engine.apply()'s import-cycle defuse
+        "vllm_ascend.ops",
+        "vllm_ascend.ops.fused_moe",
+        "vllm_ascend.ops.fused_moe.fused_moe",
     ):
         _make_module(name)
 

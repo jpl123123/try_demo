@@ -98,6 +98,15 @@ require attention weights from the kernel) are not supported on Ascend.
 * **Failure behaviour.**  Every hook is wrapped; on any unexpected API mismatch the engine logs
   and continues uncompressed.  Check the log lines starting with `[kvpress-ascend]`.
 
+## Troubleshooting
+
+| 现象 | 原因 | 对策 |
+|---|---|---|
+| 启动期 `ImportError: cannot import name 'select_experts' from partially initialized module 'vllm_ascend.ops.fused_moe.experts_selector'` | vllm-ascend v0.23.0 潜在循环导入（`ops/__init__ ↔ fused_moe ↔ experts_selector ↔ device_op ↔ ops.triton.fla`）被 .pth 预导入扰动 | **已内置修复**：激活时先按安全入口 `import vllm_ascend.ops.fused_moe.fused_moe` defuse 整个环（回归测试 `tests/test_import_cycle.py`）。仍复现时改用 vllm 插件机制：`export VLLM_PLUGINS=kvpress_ascend` |
+| 一直 `skipped_prefix_cache` | 用户开了 `--enable-prefix-caching` | 去掉该参数，或 `KVPRESS_ASCEND_PREFIX_CACHE=force`（告知 hash 失效风险） |
+| 压缩了但收益不明显 | 块内存不回收（worker 侧限制） | 省的是注意力计算/带宽；要省显存需动调度器 |
+| 无任何压缩日志 | env 没生效 / .pth 没装上 | `pip show kvpress-ascend` 检查 site-packages 里的 `.pth`；`python -c "import kvpress_ascend"` |
+
 ## Offline simulation (no NPU needed)
 
 The repository contains a full offline simulation that drives the exact engine code against

@@ -770,6 +770,48 @@ class ReqCapture:
 _PATCHED = False
 
 
+def _defuse_vllm_ascend_imports() -> bool:
+    """Defuse vllm-ascend's latent circular import before anything else.
+
+    vllm-ascend v0.23.0 has an order-sensitive module cycle::
+
+        vllm_ascend/ops/__init__.py:21  import ...ops.fused_moe.fused_moe
+        fused_moe.py:41                 from ...experts_selector import select_experts
+        experts_selector.py:25          from vllm_ascend.device.device_op import DeviceOperator
+        device_op.py:32                 from vllm_ascend.ops.triton.fla.chunk_scaled_dot_kkt import ...
+
+    The natural import order (the one vllm's CLI uses) completes the cycle
+    cleanly because the triton/fla path has no back-edge.  Importing the cycle
+    from the *wrong* entry (e.g. ``device_op`` or ``experts_selector`` first,
+    exactly what this package's own pre-import of ``attention_v1`` used to do)
+    fails mid-cycle, and the swallowed failure leaves partial modules in
+    ``sys.modules`` that break vllm's own CLI import chain afterwards
+    ("cannot import name 'select_experts' from partially initialized module
+    '...experts_selector'").
+
+    Fix: at activation, import the cycle through its canonical safe entry
+    FIRST.  All cycle modules then finish initializing in the verified-safe
+    order and stay cached, so every later import order (vllm CLI, engine
+    core, workers) hits only complete modules and the latent cycle can never
+    fire again.
+
+    Returns True when the defuse succeeded; on failure we abort patching
+    rather than risk leaving partial modules behind.
+    """
+    try:
+        import vllm_ascend.ops.fused_moe.fused_moe  # noqa: F401
+        return True
+    except Exception as exc:
+        logger.error(
+            "vllm-ascend import-cycle defuse failed (%s). Aborting patch installation "
+            "to avoid leaving partially-initialized modules. Fallback activation: "
+            "export VLLM_PLUGINS=kvpress_ascend (lets vllm import the packages in its "
+            "own order).",
+            exc,
+        )
+        return False
+
+
 def apply(force: bool = False) -> Engine:
     """Create the engine and install all monkeypatches.
 
@@ -789,6 +831,11 @@ def apply(force: bool = False) -> Engine:
             engine.window,
             engine.dry_run,
         )
+    # MUST run before any other vllm_ascend import: our own pre-import of
+    # attention_v1 would otherwise enter vllm-ascend's latent circular import
+    # from the wrong side and break vllm's CLI startup (see the defuse docstring).
+    if not _defuse_vllm_ascend_imports():
+        return engine
     try:
         _patch_vllm_ascend(engine)
         _PATCHED = True
