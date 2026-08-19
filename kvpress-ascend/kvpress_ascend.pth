@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 kvpress-ascend contributors
+# SPDX-License-Identifier: Apache-2.0
+# Auto-activation: importing kvpress_ascend at interpreter startup.  The
+# package is inert unless KVPRESS (or a sibling activation variable) is set.
+import kvpress_ascend

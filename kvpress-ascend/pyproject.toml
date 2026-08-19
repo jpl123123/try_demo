@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kvpress-ascend"
+version = "0.1.0"
+description = "Monkeypatch adapter that ports NVIDIA kvpress KV-cache compression to vllm-ascend (vLLM v1, Ascend NPU) without touching vllm-ascend sources."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "kvpress-ascend" }]
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["kvpress_ascend"]
+
+# kvpress_ascend.pth is placed at the wheel root, which pip installs directly
+# into site-packages.  It makes every python process import kvpress_ascend at
+# startup; the package is inert unless the activation env var is set.
+[tool.hatch.build.targets.wheel.force-include]
+"kvpress_ascend.pth" = "kvpress_ascend.pth"
+
+[tool.hatch.build.targets.sdist]
+include = ["kvpress_ascend", "kvpress_ascend.pth", "tests", "README.md"]
