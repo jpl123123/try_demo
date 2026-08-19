@@ -76,8 +76,26 @@ require attention weights from the kernel) are not supported on Ascend.
 | `KVPRESS_ASCEND_PREFIX_CACHE` | `skip` | `skip` = refuse to compress when `--enable-prefix-caching` is on; `force` = compress anyway (you accept stale tail-block hashes in the block pool) |
 | `KVPRESS_ASCEND_DRY_RUN` | `0` | `1` = compute scores + log statistics, never touch the cache |
 | `KVPRESS_ASCEND_LOG` | `info` | `debug` / `info` / `warning` |
+| `KVPRESS_ASCEND_STEP_LOG` | `1` | per-inference heartbeat: log at every step whether both patches are in their core code paths (seam probes) and with which core parameters |
 | `KVPRESS_ASCEND_POLICY` | `kvpress` | `kvpress` or `squeeze` when both packages are enabled |
 | `VLLM_PLUGINS` | – | alternative activation: `export VLLM_PLUGINS=kvpress_ascend` |
+
+## Per-inference patch heartbeat
+
+With `KVPRESS_ASCEND_STEP_LOG=1` (default) every model step logs one line
+showing (a) the **seam probes** — whether each monkeypatch really entered its
+core code path (`OK` / `FAIL` / `n/a` when the module is not present in this
+process), (b) the **core parameters** of the active press, and (c) the
+squeeze policy status when enabled:
+
+```
+[kvpress-ascend] INFO step=42 reqs=4 seams=8/8 records=3 press=snapkv params=ratio=0.500 window=64
+[kvpress-ascend] INFO step=43 reqs=4 seams=8/8 records=3 press=squeeze params=ratio=0.790 ini_size=0.210 class3_ratio=0.080 n_sink=4 squeeze=ACTIVE(capture_hidden=True) budgets={'req_1': {0: 63, 1: 63, 2: 24}}
+```
+
+A one-time activation summary with the full seam table is printed right after
+the patches install; `seams=…FAIL:[...]` or a missing heartbeat line means a
+patch did not enter its core code — check the `[kvpress-ascend]` error logs.
 
 ## Important caveats
 

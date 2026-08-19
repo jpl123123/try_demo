@@ -192,6 +192,32 @@ def test_uniform_layout_under_spec_decode():
     assert engine._use_per_layer_layout(runner) is False
 
 
+def test_heartbeat_reports_squeeze_active():
+    """Per-inference heartbeat must show the squeeze patch as ACTIVE with its
+    core parameters and the per-layer budgets of the running request."""
+    import io
+    import logging
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    logger = logging.getLogger("kvpress_ascend")
+    logger.addHandler(handler)
+    try:
+        press = SqueezePress(ini_size=0.21, class3_ratio=0.08, n_sink=4)
+        engine = Engine(registry=registry_mod.Registry())
+        engine.set_press(press, per_layer_mode=True, capture_hidden=True)
+        runner, caches, scheduler = _run_prefill(engine, press)
+        handler.flush()
+        out = buf.getvalue()
+    finally:
+        logger.removeHandler(handler)
+    assert "press=squeeze" in out, out
+    assert "squeeze=ACTIVE(capture_hidden=True)" in out, out
+    assert "ini_size=0.210" in out and "class3_ratio=0.080" in out and "n_sink=4" in out
+    assert "budgets=" in out, "heartbeat must list per-request per-layer budgets"
+    assert "req0" in out
+
+
 def test_env_gating(monkeypatch):
     import squeezeattention_ascend.envs as envs
 

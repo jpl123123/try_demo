@@ -143,11 +143,115 @@ class Engine:
             if self.press:
                 self._maybe_compress(runner, scheduler_output)
                 self._drop_finished_records(scheduler_output)
+                self.heartbeat(runner)
         except Exception:
             logger.error("kvpress compression pass failed:\n%s", traceback.format_exc())
             self.registry.bump("skipped_error")
         finally:
             self.registry.end_step()
+
+    # ------------------------------------------------------------------ #
+    # per-inference patch health heartbeat
+    # ------------------------------------------------------------------ #
+
+    SEAM_PROBES = (
+        ("vllm_ascend.attention.attention_v1", "AscendAttentionBackendImpl", "forward", "backend_forward"),
+        ("vllm_ascend.attention.attention_v1", "AscendC8AttentionBackendImpl", "forward", "backend_c8_forward"),
+        ("vllm_ascend.worker.model_runner_v1", "NPUModelRunner", "execute_model", "execute_model"),
+        ("vllm_ascend.worker.model_runner_v1", "NPUModelRunner", "_prepare_inputs", "prepare_inputs"),
+        ("vllm_ascend.worker.model_runner_v1", "NPUModelRunner", "_build_attention_metadata", "build_attn_metadata"),
+        ("vllm_ascend.worker.block_table", "BlockTable", "compute_slot_mapping", "slot_mapping"),
+        ("vllm_ascend.worker.block_table", "BlockTable", "compute_slot_mapping_draft", "slot_mapping_draft"),
+        ("vllm.model_executor.layers.attention", "Attention", "forward", "attention_module"),
+    )
+
+    def patch_status(self) -> dict:
+        """Probe every patched seam: True = our wrapper is installed on the
+        live method (the patch has really entered the core code)."""
+        import importlib
+
+        status = {}
+        for module_name, cls_name, method_name, label in self.SEAM_PROBES:
+            try:
+                cls = getattr(importlib.import_module(module_name), cls_name)
+                wrapped = bool(getattr(getattr(cls, method_name), "_kvpress_wrapped", False))
+                status[label] = wrapped
+            except Exception:
+                status[label] = None  # module/class unavailable in this process
+        return status
+
+    def heartbeat(self, runner) -> None:
+        """One compact log line per inference step: patch seam probes and the
+        core parameters of both patches (engine press + squeeze policy)."""
+        if not envs.step_log() or self.press is None:
+            return
+        try:
+            status = self.patch_status()
+            seam_ok = sum(1 for v in status.values() if v is True)
+            seam_total = len(status)
+            ok = f"{seam_ok}/{seam_total}"
+            if any(v is False for v in status.values()):
+                ok += f" !!FAIL:{[k for k, v in status.items() if v is False]}"
+            if any(v is None for v in status.values()):
+                ok += f" n/a:{[k for k, v in status.items() if v is None]}"
+
+            press = self.press
+            params = self._press_params(press)
+            req_ids = self._req_ids(runner)
+            squeeze = ""
+            if press.name == "squeeze":
+                squeeze = " squeeze=ACTIVE(capture_hidden=%s)" % self.capture_hidden
+                budgets = {}
+                for req in req_ids[:8]:
+                    b = getattr(press, "_budgets", {}).get(req)
+                    if b:
+                        budgets[req] = {k: int(v) for k, v in sorted(b.items())}
+                if budgets:
+                    squeeze += " budgets=" + str(budgets)
+            logger.info(
+                "step=%d reqs=%d seams=%s records=%d press=%s params=%s%s",
+                self.registry.step_counter,
+                len(req_ids),
+                ok,
+                len(self.registry.records),
+                press.name,
+                params,
+                squeeze,
+            )
+        except Exception:
+            logger.debug("heartbeat failed:\n%s", traceback.format_exc())
+
+    @staticmethod
+    def _press_params(press) -> str:
+        parts = [f"ratio={press.compression_ratio:.3f}"]
+        for attr in ("window", "sink", "n_sink", "ini_size", "class3_ratio", "alpha_safeguard"):
+            if hasattr(press, attr):
+                val = getattr(press, attr)
+                if isinstance(val, float):
+                    parts.append(f"{attr}={val:.3f}")
+                else:
+                    parts.append(f"{attr}={val}")
+        return " ".join(parts)
+
+    def log_activation_summary(self) -> None:
+        """One-time status line after patch installation: every seam probe and
+        the core parameters of the active press / squeeze policy."""
+        status = self.patch_status()
+        seams = " ".join(
+            f"{k}={'OK' if v is True else ('N/A' if v is None else 'FAIL')}" for k, v in status.items()
+        )
+        press = self.press
+        squeeze = "inactive"
+        if press is not None and press.name == "squeeze":
+            squeeze = "active(capture_hidden=%s)" % self.capture_hidden
+        logger.info(
+            "patch activation summary: seams[%s] press=%s params=[%s] squeeze=%s step_log=%s",
+            seams,
+            press.name if press is not None else "-",
+            self._press_params(press) if press is not None else "-",
+            squeeze,
+            envs.step_log(),
+        )
 
     # ------------------------------------------------------------------ #
     # compression pass
@@ -839,6 +943,7 @@ def apply(force: bool = False) -> Engine:
     try:
         _patch_vllm_ascend(engine)
         _PATCHED = True
+        engine.log_activation_summary()
         return engine
     except Exception:
         logger.error("kvpress-ascend patch installation failed (server continues unpatched):\n%s", traceback.format_exc())

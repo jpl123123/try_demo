@@ -180,6 +180,44 @@ def test_patch_application():
         uninstall_fake_vllm()
 
 
+def test_patch_status_probes_all_seams():
+    """The heartbeat's seam probe must report every patch as installed."""
+    install_fake_vllm()
+    try:
+        engine_mod._PATCHED = False
+        engine = engine_mod.apply()
+        status = engine.patch_status()
+        assert len(status) == len(Engine.SEAM_PROBES)
+        assert all(v is True for v in status.values()), status
+    finally:
+        uninstall_fake_vllm()
+
+
+def test_heartbeat_logs_every_step():
+    """Every inference step emits one heartbeat line with seam probes and the
+    core parameters of the active press."""
+    import io
+    import logging
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    logger = logging.getLogger("kvpress_ascend")
+    logger.addHandler(handler)
+    try:
+        engine = Engine(registry=registry_mod.Registry())
+        press = presses.build_press("streamingllm", 0.5, sink=4)
+        runner, caches, scheduler, orig_len, record, _ = _compress_with(engine, press)
+        handler.flush()
+        out = buf.getvalue()
+    finally:
+        logger.removeHandler(handler)
+    assert "step=" in out and "seams=" in out and "press=streamingllm" in out
+    assert "params=" in out and "ratio=0.500" in out and "sink=4" in out
+    assert "records=" in out
+    # heartbeat must appear once per step (two chunked-prefill steps)
+    assert out.count("step=") >= 2
+
+
 # --------------------------------------------------------------------------- #
 # end-to-end: chunked prefill -> compress (snapkv) -> decode
 # --------------------------------------------------------------------------- #

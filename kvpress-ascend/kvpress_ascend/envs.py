@@ -111,6 +111,12 @@ def log_level() -> str:
     return _env("KVPRESS_ASCEND_LOG", default="info").strip().lower()
 
 
+def step_log() -> bool:
+    """Per-inference heartbeat: log at every step whether both patches are in
+    their core code paths (seam probes) and with which core parameters."""
+    return _env("KVPRESS_ASCEND_STEP_LOG", default="1").strip().lower() in _TRUTHY
+
+
 def spec_decode_allow() -> bool:
     # Speculative decoding (MTP/EAGLE) is fully supported by the uniform-layout
     # engine.  This knob is kept for future per-layer layouts.

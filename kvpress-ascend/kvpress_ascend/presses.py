@@ -139,7 +139,9 @@ def make_streamingllm(ratio: float, n_sink: int = 4) -> Press:
         scores[:, :, n_sink : n_sink + n_pruned] = 0
         return scores
 
-    return Press(name="streamingllm", compression_ratio=ratio, score=score)
+    press = Press(name="streamingllm", compression_ratio=ratio, score=score)
+    press.n_sink = n_sink  # core parameter, visible to the heartbeat
+    return press
 
 
 def make_knorm(ratio: float) -> Press:
@@ -175,7 +177,10 @@ def make_snapkv(ratio: float, window: int = 64, kernel_size: int = 5) -> Press:
         scores = torch.nn.functional.pad(scores, (0, w), value=float(scores.max().item() + 1))
         return scores
 
-    return Press(name="snapkv", compression_ratio=ratio, needs_queries=True, score=score)
+    press = Press(name="snapkv", compression_ratio=ratio, needs_queries=True, score=score)
+    press.window = window  # core parameter, visible to the heartbeat
+    press.kernel_size = kernel_size
+    return press
 
 
 def make_tova(ratio: float) -> Press:
@@ -224,7 +229,9 @@ def make_adakv(ratio: float, alpha_safeguard: float = 0.2, base: Optional[Press]
         s.scatter_(-1, top, torch.finfo(s.dtype).max)
         return s
 
-    return Press(name="adakv", compression_ratio=ratio, needs_queries=base.needs_queries, score=score)
+    press = Press(name="adakv", compression_ratio=ratio, needs_queries=base.needs_queries, score=score)
+    press.alpha_safeguard = alpha_safeguard  # core parameter, visible to the heartbeat
+    return press
 
 
 _REGISTRY = {
