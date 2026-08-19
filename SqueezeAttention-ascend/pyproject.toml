@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "SqueezeAttention-ascend"
+version = "0.1.0"
+description = "Monkeypatch adapter porting SqueezeAttention (layer-wise KV-cache budget allocation) to vllm-ascend via the kvpress-ascend engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "SqueezeAttention-ascend" }]
+dependencies = [
+    "kvpress-ascend>=0.1.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["squeezeattention_ascend"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"squeezeattention_ascend.pth" = "squeezeattention_ascend.pth"
+
+[tool.hatch.build.targets.sdist]
+include = ["squeezeattention_ascend", "squeezeattention_ascend.pth", "tests", "README.md"]

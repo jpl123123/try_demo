@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 SqueezeAttention-ascend contributors
+# SPDX-License-Identifier: Apache-2.0
+# Auto-activation: importing squeezeattention_ascend at interpreter startup.
+# Inert unless SQUEEZE (or a sibling activation variable) is set.
+import squeezeattention_ascend
