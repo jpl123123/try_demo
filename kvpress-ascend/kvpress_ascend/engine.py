@@ -64,6 +64,20 @@ logger = get_logger()
 PREFILL_STATES = ("PrefillNoCache", "PrefillCacheHit", "ChunkedPrefill")
 
 
+def _is_prefill_state(attn_state) -> bool:
+    """True for prefill attention states.
+
+    ``attn_metadata.attn_state`` is an ``AscendAttentionState`` Enum member on
+    the real backend (whose ``.value`` is an *integer* 0-4, NOT a string) and
+    a plain string in offline mocks.  ``.name`` yields the member name for
+    Enums and falls back to the string itself, so one comparison covers both.
+    """
+    if attn_state is None:
+        return False
+    name = getattr(attn_state, "name", attn_state)
+    return name in PREFILL_STATES
+
+
 def _synchronize(device) -> None:
     """Block until queued device work completes (needed before cache reads)."""
     try:
@@ -627,9 +641,7 @@ class Engine:
             press = self.press
             if press is None or not (press.needs_queries or self.capture_hidden):
                 return
-            state = getattr(attn_metadata, "attn_state", None)
-            state = getattr(state, "value", state)  # Enum support
-            if state not in PREFILL_STATES:
+            if not _is_prefill_state(getattr(attn_metadata, "attn_state", None)):
                 return
             layer_name = getattr(layer, "layer_name", None)
             if not layer_name:
@@ -664,9 +676,7 @@ class Engine:
             ctx = self.registry.current()
             if ctx is None or not ctx.is_prefill_step:
                 return
-            state = getattr(attn_metadata, "attn_state", None)
-            state = getattr(state, "value", state)
-            if state not in PREFILL_STATES:
+            if not _is_prefill_state(getattr(attn_metadata, "attn_state", None)):
                 return
             layer_name = getattr(layer, "layer_name", None)
             if not layer_name or hidden_states is None or out is None:

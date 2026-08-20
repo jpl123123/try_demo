@@ -158,13 +158,13 @@ def make_snapkv(ratio: float, window: int = 64, kernel_size: int = 5) -> Press:
 
     def score(layer_idx, keys, values, queries, attentions, extra=None):
         bsz, num_kv_heads, k_len, _ = keys.shape
-        num_heads = queries.shape[1]
-        groups = num_heads // num_kv_heads
         w = min(window, k_len - 1)
         if queries is None or queries.shape[2] < w:
             # Not enough captured queries (or capture disabled): fall back to
             # a positional score so the pipeline still runs.
             return torch.ones_like(keys[..., 0])
+        num_heads = queries.shape[1]
+        groups = num_heads // num_kv_heads
         q = queries[:, :, -w:, :]
         attn = _window_attention(q, keys, w, num_kv_heads, keys.shape[-1])
         attn_weights = attn[..., : k_len - w]

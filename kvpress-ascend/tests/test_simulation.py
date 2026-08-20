@@ -193,6 +193,53 @@ def test_patch_status_probes_all_seams():
         uninstall_fake_vllm()
 
 
+def test_enum_attn_state_matches_real_backend():
+    """Regression for the on-machine crash: AscendAttentionState is an
+    enum.Enum whose .value is an INT (0-4), not a string. The query capture
+    must still fire on the real backend (state.name == 'ChunkedPrefill'),
+    otherwise snapkv gets queries=None and dies with:
+
+        AttributeError: 'NoneType' object has no attribute 'shape'
+    """
+    import enum
+
+    class AscendAttentionState(enum.Enum):
+        PrefillNoCache = 0
+        PrefillCacheHit = 1
+        DecodeOnly = 2
+        ChunkedPrefill = 3
+        SpecDecoding = 4
+
+    engine = Engine(registry=registry_mod.Registry())
+    press = presses.build_press("snapkv", 0.5, window=64)
+    runner = _make_runner()
+    caches = _make_caches()
+    _register_caches(runner, caches)
+    scheduler = FakeScheduler(BS)
+    engine.press = press
+    engine.min_len = 0
+    runner.set_requests(["req0"], np.array([0], dtype=np.int64), np.array([300], dtype=np.int64))
+    kv, q, h = _random_chunk(None, 300)
+    meta = FakeAttnMeta(attn_state=AscendAttentionState.ChunkedPrefill)
+    simulate_step(runner, engine, scheduler, caches, ["req0"], np.array([300]), kv, q, h, LAYERS, meta)
+    record = engine.registry.get("req0")
+    assert record is not None, "request must be compressed with Enum attn_state"
+    assert 0 in record.keep_indices
+    assert record.keep_indices[0].shape[1] == 150, "query capture must have fired"
+
+
+def test_snapkv_score_falls_back_without_queries():
+    """queries=None must not crash the scorer (defensive fallback path)."""
+    press = presses.build_press("snapkv", 0.5, window=64)
+    keys = torch.randn(1, 2, 300, 16)
+    scores = press.score(0, keys, keys, None, None)
+    assert scores.shape == (1, 2, 300)
+    assert torch.all(scores == 1.0)
+    tova = presses.build_press("tova", 0.5)
+    scores = tova.score(0, keys, keys, None, None)
+    assert scores.shape == (1, 2, 300)
+
+
 def test_heartbeat_logs_every_step():
     """Every inference step emits one heartbeat line with seam probes and the
     core parameters of the active press."""
@@ -448,3 +495,27 @@ def test_per_layer_layout_overrides():
     m = rec.n_blocks_orig
     k0 = rec.n_blocks_kept
     assert meta0.block_tables[0][0].item() == row[m - k0]
+
+
+def test_is_prefill_state_all_forms():
+    """_is_prefill_state must accept Enum members (real backend, int .value),
+    plain strings (offline mocks) and None."""
+    import enum
+
+    from kvpress_ascend.engine import _is_prefill_state
+
+    class AscendAttentionState(enum.Enum):
+        PrefillNoCache = 0
+        PrefillCacheHit = 1
+        DecodeOnly = 2
+        ChunkedPrefill = 3
+        SpecDecoding = 4
+
+    assert _is_prefill_state(AscendAttentionState.PrefillNoCache) is True
+    assert _is_prefill_state(AscendAttentionState.PrefillCacheHit) is True
+    assert _is_prefill_state(AscendAttentionState.ChunkedPrefill) is True
+    assert _is_prefill_state(AscendAttentionState.DecodeOnly) is False
+    assert _is_prefill_state(AscendAttentionState.SpecDecoding) is False
+    assert _is_prefill_state("ChunkedPrefill") is True
+    assert _is_prefill_state("DecodeOnly") is False
+    assert _is_prefill_state(None) is False
