@@ -107,6 +107,33 @@ def slot_ids_for_positions(row: np.ndarray, positions: np.ndarray, block_size: i
     return (block_ids * block_size + positions % block_size).astype(np.int64)
 
 
+def validate_slots(slots: np.ndarray, num_slots: int, context: dict) -> tuple[bool, str]:
+    """CPU-side guard: every slot must lie in [0, num_slots).
+
+    NEVER feed an out-of-range index into a device gather: on Ascend the
+    resulting AI Core / vector exception poisons the NPU stream, so a Python
+    try/except around the op cannot save the worker (observed on-machine:
+    gather_v3 index out of range -> 'ACL stream synchronize failed' ->
+    worker crash in a later sample_tokens sync).  Return (ok, diagnostic).
+    """
+    if slots is None or len(slots) == 0:
+        return True, ""
+    mn = int(slots.min())
+    mx = int(slots.max())
+    if 0 <= mn and mx < num_slots:
+        return True, ""
+    bad = np.nonzero((slots < 0) | (slots >= num_slots))[0][:8].tolist()
+    diag = (
+        f"slots out of range [0,{num_slots}): min={mn} max={mx} "
+        f"num_slots_needed={len(slots)} bad_positions={bad} "
+        f"row_head={np.asarray(context.get('row_head', [])).tolist()} "
+        f"num_blocks_per_row={context.get('num_blocks_per_row')} "
+        f"row_idx={context.get('row_idx')} req_id={context.get('req_id')} "
+        f"orig_len={context.get('orig_len')} block_size={context.get('block_size')}"
+    )
+    return False, diag
+
+
 def _flatten_cache(cache, num_kv_heads: int, head_dim: int):
     """Reshape a paged cache tensor to (num_blocks*bs, kv_heads, head_dim)."""
     import torch

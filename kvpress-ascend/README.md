@@ -124,6 +124,7 @@ patch did not enter its core code — check the `[kvpress-ascend]` error logs.
 | 一直 `skipped_prefix_cache` | 用户开了 `--enable-prefix-caching` | 去掉该参数，或 `KVPRESS_ASCEND_PREFIX_CACHE=force`（告知 hash 失效风险） |
 | 压缩了但收益不明显 | 块内存不回收（worker 侧限制） | 省的是注意力计算/带宽；要省显存需动调度器 |
 | 无任何压缩日志 | env 没生效 / .pth 没装上 | `pip show kvpress-ascend` 检查 site-packages 里的 `.pth`；`python -c "import kvpress_ascend"` |
+| 设备端 `gather_v3 index out of range` / `ACL stream synchronize failed` 后 worker 崩 | 块表行内容损坏 → slots 越界进入设备算子，污染 NPU 流 | 已内置 CPU 前置守卫（`validate_slots`）：非法 slots 在进设备前拦截、跳过该请求并打印完整诊断（含 row 头/行号）；仍复现请把守卫日志 + `ASCEND_LAUNCH_BLOCKING=1` 下的准确栈发回 |
 
 ## Offline simulation (no NPU needed)
 

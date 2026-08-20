@@ -519,3 +519,42 @@ def test_is_prefill_state_all_forms():
     assert _is_prefill_state("ChunkedPrefill") is True
     assert _is_prefill_state("DecodeOnly") is False
     assert _is_prefill_state(None) is False
+
+
+def test_invalid_block_table_skipped_not_crash():
+    """Regression for the on-machine crash: a corrupted block-table row (block
+    id 86038 >> cache blocks) must be caught by the CPU-side slot guard BEFORE
+    any device op -- never crash the worker with an out-of-range gather."""
+    engine = Engine(registry=registry_mod.Registry())
+    press = presses.build_press("snapkv", 0.5, window=64)
+    runner = _make_runner()
+    caches = _make_caches(num_blocks=64)  # 64 blocks -> 8192 slots
+    _register_caches(runner, caches)
+    scheduler = FakeScheduler(BS)
+    engine.press = press
+    engine.min_len = 0
+    runner.set_requests(["req0"], np.array([0], dtype=np.int64), np.array([300], dtype=np.int64))
+    kv1, q1, h1 = _random_chunk(None, 128)
+    kv2, q2, h2 = _random_chunk(None, 172)
+    meta = FakeAttnMeta()
+    simulate_step(runner, engine, scheduler, caches, ["req0"], np.array([128]), kv1, q1, h1, LAYERS, meta)
+    # corrupt the request's block-table row between prefill chunks: block id
+    # 86038 produces slot 11012869, exactly the on-machine out-of-range index
+    runner.input_batch.block_table.block_table.np[0][0] = 86038
+    simulate_step(runner, engine, scheduler, caches, ["req0"], np.array([172]), kv2, q2, h2, LAYERS, meta)
+    assert engine.registry.get("req0") is None, "corrupted row must skip compression"
+    assert engine.registry.stats.get("skipped_error", 0) >= 1
+
+
+def test_validate_slots_unit():
+    from kvpress_ascend.kvcore import validate_slots
+
+    ok, diag = validate_slots(np.array([0, 1, 8191]), 8192, {})
+    assert ok and diag == ""
+    ok, diag = validate_slots(np.array([0, 8192]), 8192, {"req_id": "r1", "row_idx": 0})
+    assert not ok
+    assert "out of range" in diag and "req_id=r1" in diag and "8192" in diag
+    ok, _ = validate_slots(np.array([-1]), 8192, {})
+    assert not ok
+    ok, _ = validate_slots(np.array([], dtype=np.int64), 8192, {})
+    assert ok

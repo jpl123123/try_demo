@@ -54,7 +54,9 @@ from .kvcore import (
     select_keep_indices,
     shifted_positions_numpy,
     shifted_positions_tensor,
+    slot_ids_for_positions,
     split_kv_cache,
+    validate_slots,
 )
 from .presses import Press, build_press
 from .registry import CaptureContext, CompressionRecord, Registry
@@ -330,6 +332,10 @@ class Engine:
 
         # --- geometry ------------------------------------------------------ #
         try:
+            # authoritative row index: batch enumeration order may diverge
+            # from the block-table row order under async scheduling
+            authoritative_idx = self._row_index(runner, req_id)
+            row_idx = authoritative_idx if authoritative_idx is not None else row_idx
             layer_names = self._group0_layer_names(runner)
             if not layer_names:
                 logger.warning("req %s: no supported (full-attention) KV group found, skip", req_id)
@@ -351,6 +357,28 @@ class Engine:
 
             device = key_cache0.device
             dtype = key_cache0.dtype
+            num_slots = int(key_cache0.shape[0]) * block_size
+
+            # CPU-side slot guard BEFORE any device op: an out-of-range index
+            # poisons the NPU stream (gather_v3 AI Core exception) and the
+            # worker dies at the next sync point -- Python catch cannot help.
+            slots = slot_ids_for_positions(row, np.arange(orig_len, dtype=np.int64), block_size)
+            ok_slots, diag = validate_slots(
+                slots,
+                num_slots,
+                {
+                    "row_head": row[:16],
+                    "num_blocks_per_row": cur_blocks,
+                    "row_idx": row_idx,
+                    "req_id": req_id,
+                    "orig_len": orig_len,
+                    "block_size": block_size,
+                },
+            )
+            if not ok_slots:
+                logger.error("req %s: block table sanity check failed, compression skipped:\n%s", req_id, diag)
+                registry.bump("skipped_error")
+                return
         except Exception:
             logger.warning("req %s: could not resolve cache geometry, skip:\n%s", req_id, traceback.format_exc())
             registry.bump("skipped_error")
